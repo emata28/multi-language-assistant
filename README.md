@@ -59,6 +59,7 @@ pip install -r requirements.txt
 python src/download_model.py --list
 
 # Download specific models
+python src/download_model.py --model vosk-model-es-0.42        # Big Spanish model
 python src/download_model.py --model vosk-model-small-fr-0.22  # French model
 python src/download_model.py --model vosk-model-small-cn-0.22  # Chinese model
 ```

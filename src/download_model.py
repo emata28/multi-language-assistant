@@ -6,9 +6,30 @@ import zipfile
 import argparse
 from pathlib import Path
 
-DEFAULT_MODEL = "vosk-model-small-en-us-0.15"
+DEFAULT_MODEL = "vosk-model-en-us-0.22"
 DEFAULT_MODEL_URL = f"https://alphacephei.com/vosk/models/{DEFAULT_MODEL}.zip"
 MODELS_ROOT_DIR = "models"  # Root directory for all models
+
+def ensure_models_directory() -> Path:
+    """
+    Ensure the models directory exists and return its path.
+    Creates the directory if it doesn't exist.
+    
+    Returns:
+        Path: Path object pointing to the models directory
+    
+    Raises:
+        OSError: If directory creation fails
+    """
+    models_root = Path(MODELS_ROOT_DIR)
+    try:
+        models_root.mkdir(exist_ok=True)
+        if not models_root.exists():
+            raise OSError(f"Failed to create models directory at {models_root}")
+        return models_root
+    except Exception as e:
+        print(f"Error ensuring models directory exists: {e}")
+        sys.exit(1)
 
 def download_file(url: str, destination: str) -> None:
     """
@@ -44,15 +65,15 @@ def get_model_dir(model_name: str) -> Path:
     """
     Get the directory path for a specific model
     """
-    return Path(MODELS_ROOT_DIR) / model_name
+    models_root = ensure_models_directory()
+    return models_root / model_name
 
 def setup_model(model_name: str = DEFAULT_MODEL) -> None:
     """
     Download and setup the Vosk model
     """
-    # Create models root directory if it doesn't exist
-    models_root = Path(MODELS_ROOT_DIR)
-    models_root.mkdir(exist_ok=True)
+    # Ensure models directory exists
+    models_root = ensure_models_directory()
     
     # Create temporary directory if needed
     temp_dir = Path("temp")
@@ -130,20 +151,21 @@ def list_installed_models():
     """
     List all installed models in the models directory
     """
-    models_root = Path(MODELS_ROOT_DIR)
-    if not models_root.exists():
-        print("No models directory found.")
-        return
-    
-    models = [d for d in models_root.iterdir() if d.is_dir()]
-    if not models:
-        print("No models installed.")
-        return
-    
-    print("\nInstalled models:")
-    for model_dir in models:
-        print(f"- {model_dir.name}")
-    print()
+    try:
+        models_root = ensure_models_directory()
+        models = [d for d in models_root.iterdir() if d.is_dir()]
+        
+        if not models:
+            print("No models installed.")
+            return
+        
+        print("\nInstalled models:")
+        for model_dir in models:
+            print(f"- {model_dir.name}")
+        print()
+    except Exception as e:
+        print(f"Error listing models: {e}")
+        sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser(description="Download and setup Vosk speech recognition model")
