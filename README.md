@@ -1,28 +1,41 @@
-# Python Speech Recognition Project
+# Draco Assistant - Multilingual Speech Recognition
 
-This is a Python project that implements continuous speech recognition using Vosk.
+This project implements real-time multilingual speech recognition using OpenAI's Whisper model, with support for GPU acceleration.
+
+## Features
+
+- Real-time speech recognition in multiple languages
+- Automatic language detection
+- GPU acceleration support (NVIDIA GPUs)
+- Option to translate any language to English
+- High accuracy with various model sizes (tiny to large)
+- Continuous speech recognition with silence detection
+
+## Project Structure
 
 ```
 project/
 │
 ├── src/                    # Source code
 │   ├── __init__.py
-│   ├── speech_recognition.py
-│   └── download_model.py
+│   └── speech_recognition.py
 │
-├── models/                 # Speech recognition models
-│   ├── vosk-model-small-en-us-0.15/    # Default English model
-│   └── [other-models]/                 # Additional models
+├── models/                 # Whisper model cache
 │
 ├── tests/                  # Test files
 │   └── __init__.py
-│
-├── docs/                   # Documentation
 │
 ├── requirements.txt        # Project dependencies
 │
 └── README.md              # Project documentation
 ```
+
+## Requirements
+
+- Python 3.8 or higher
+- PyTorch with CUDA support (for GPU acceleration)
+- NVIDIA GPU (optional, but recommended)
+- CUDA toolkit and cuDNN (for GPU support)
 
 ## Setup
 
@@ -52,50 +65,59 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. (Optional) Manage Vosk models:
+4. (Optional) Verify GPU Support:
 
 ```bash
-# List installed models
-python src/download_model.py --list
-
-# Download specific models
-python src/download_model.py --model vosk-model-es-0.42        # Big Spanish model
-python src/download_model.py --model vosk-model-small-fr-0.22  # French model
-python src/download_model.py --model vosk-model-small-cn-0.22  # Chinese model
+python test_cuda.py
 ```
-
-Note: Models are automatically downloaded when needed. The default English model will be downloaded on first use if not present.
-
-Available models can be found at: https://alphacephei.com/vosk/models
 
 ## Usage
 
 ### Basic Usage
 
-Run the speech recognition script with default settings (uses English model):
+Run the speech recognition with default settings (base model, auto-detect language):
 
 ```bash
 python src/speech_recognition.py
 ```
 
-The script will:
+### Model Selection
 
-1. Check if the requested model exists in the `models` directory
-2. Download the model if not found
-3. Start the speech recognition system
+Choose from different model sizes based on your needs:
 
-### Model Management
-
-1. List installed models:
+- `tiny`: Fastest, lowest accuracy
+- `base`: Good balance for most uses
+- `small`: Better accuracy, still reasonable speed
+- `medium`: High accuracy, recommended for GPU
+- `large`: Highest accuracy, requires GPU
 
 ```bash
-python src/speech_recognition.py --list-models
+# Use medium model for better accuracy
+python src/speech_recognition.py --model medium
+
+# Use tiny model for fastest processing
+python src/speech_recognition.py --model tiny
 ```
 
-2. Use a specific model:
+### Language Options
+
+1. Auto-detect language (default):
 
 ```bash
-python src/speech_recognition.py --model vosk-model-small-fr-0.22  # Use French model
+python src/speech_recognition.py
+```
+
+2. Specify language:
+
+```bash
+python src/speech_recognition.py --language en  # Force English
+python src/speech_recognition.py --language es  # Force Spanish
+```
+
+3. Translate to English:
+
+```bash
+python src/speech_recognition.py --translate  # Translates any language to English
 ```
 
 ### Audio Device Configuration
@@ -114,39 +136,41 @@ python src/speech_recognition.py --device 1
 
 ### Advanced Configuration
 
-Configure audio settings and behavior:
+Configure audio settings:
 
 ```bash
 # Adjust audio settings
 python src/speech_recognition.py --samplerate 44100 --blocksize 4000
-
-# Disable partial results
-python src/speech_recognition.py --no-partial
 ```
 
 Available options:
 
-- `--model`: Name of the Vosk model to use (default: vosk-model-small-en-us-0.15)
+- `--model`: Whisper model size (tiny, base, small, medium, large)
 - `--device`: Audio input device ID (default: system default)
 - `--samplerate`: Audio sample rate in Hz (default: 16000)
 - `--blocksize`: Audio block size in samples (default: 8000)
-- `--no-partial`: Disable partial recognition results
+- `--language`: Language code (e.g., 'en', 'es') or None for auto-detection
+- `--translate`: Translate speech to English
 - `--list-devices`: List available audio input devices and exit
-- `--list-models`: List installed Vosk models and exit
 
-### Customizing Speech Recognition
+## GPU Support
 
-You can extend the `ContinuousSpeechRecognizer` class to handle detected speech in your own way:
+For optimal performance, the system will automatically use your NVIDIA GPU if available. To ensure GPU support:
 
-```python
-from src.speech_recognition import ContinuousSpeechRecognizer
+1. Install NVIDIA GPU drivers
+2. Install CUDA toolkit (compatible with PyTorch)
+3. Install cuDNN
+4. Verify GPU support:
 
-class MyRecognizer(ContinuousSpeechRecognizer):
-    def on_speech_detected(self, text):
-        # Handle complete speech detection
-        print(f"You said: {text}")
-
-    def on_partial_speech(self, text):
-        # Handle partial speech detection
-        print(f"Partial text: {text}")
+```bash
+python test_cuda.py
 ```
+
+## Performance Tips
+
+1. Choose the right model size:
+   - CPU: Use `tiny` or `base` models
+   - GPU: Can use `medium` or `large` models
+2. For multilingual use, `medium` model provides the best balance
+3. Use `--translate` for real-time translation to English
+4. Adjust `blocksize` if you need faster/slower response time
