@@ -1,0 +1,59 @@
+# User configuration for Draco Assistant
+
+# Speech recognition settings
+speech:
+  model: "base" # Using base model for good balance of speed and accuracy
+  language: null # Set to null to enable auto language detection
+  device: null # Audio input device ID (null for default)
+  samplerate: 16000
+  blocksize: 1024 # Reduced for better real-time handling
+  min_speech_duration: 0.3 # Increased minimum duration to avoid false triggers
+  silence_duration: 0.5 # Increased silence duration for better phrase detection
+  speech_threshold: 0.05 # Increased threshold to avoid background noise
+  batch_size: 1 # Process one chunk at a time for faster response
+  use_fp16: true # Use half-precision for faster processing
+  beam_size: 1 # Reduced beam size for faster processing
+  best_of: 1 # Reduced best_of for faster processing
+  temperature: 0.0 # Disable sampling for faster processing
+
+# LLM settings
+llm:
+  provider: "ollama" # LLM provider (ollama)
+  model: "tinyllama" # Using tinyllama for faster processing
+  temperature: 0.1 # Lower temperature for more consistent results
+  max_tokens: 50 # Reduced max tokens since we only need short responses
+  num_ctx: 512 # Smaller context window for faster processing
+  num_thread: 4 # Number of CPU threads to use
+  num_gpu: 1 # Number of GPU layers to use (if available)
+
+# Command settings
+commands:
+  # System commands (always enabled)
+  system:
+    enabled: true
+    commands:
+      - help
+      - list
+      - status
+
+  # Spotify integration
+  spotify:
+    enabled: false
+    client_id: ""
+    client_secret: ""
+    redirect_uri: "http://localhost:8888/callback"
+    scope: "user-read-playback-state user-modify-playback-state"
+
+  # Smart home integration
+  smart_home:
+    enabled: false
+    host: "http://localhost:8123"
+    token: ""
+    entities: [] # List of entity IDs to control
+
+# Logging settings
+logging:
+  level: "INFO" # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  file: "logs/draco.log" # Log file path
+  max_size: 10485760 # Maximum log file size (10MB)
+  backup_count: 5 # Number of backup files to keep
