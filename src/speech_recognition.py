@@ -1,22 +1,92 @@
 import queue
 import sounddevice as sd
 import numpy as np
-import whisper
 import torch
+import warnings
+import psutil
+# Set torch.load to use weights_only=True for security before importing whisper
+torch.serialization._weights_only_default = True
+# Suppress the specific torch.load warning from whisper
+warnings.filterwarnings("ignore", message=".*torch.load.*weights_only.*")
+import whisper
 import sys
 import json
 import argparse
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 from pathlib import Path
+
+def get_optimal_settings(model_name: str) -> Tuple[int, bool, int]:
+    """
+    Automatically determine optimal settings based on hardware and model size.
+    
+    Returns:
+        Tuple[int, bool, int]: (batch_size, use_fp16, blocksize)
+    """
+    # Get system information
+    total_memory = psutil.virtual_memory().total / (1024**3)  # Convert to GB
+    cuda_available = torch.cuda.is_available()
+    gpu_memory = 0
+    
+    if cuda_available:
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)  # Convert to GB
+        gpu_name = torch.cuda.get_device_name(0)
+        print(f"\nGPU detected: {gpu_name}")
+        print(f"GPU memory: {gpu_memory:.1f}GB")
+    else:
+        print("\nNo GPU detected, using CPU")
+    
+    print(f"System memory: {total_memory:.1f}GB")
+    
+    # Model size requirements (approximate)
+    model_sizes = {
+        "tiny": {"gpu_mem": 1, "cpu_mem": 2},
+        "base": {"gpu_mem": 1.5, "cpu_mem": 3},
+        "small": {"gpu_mem": 2, "cpu_mem": 4},
+        "medium": {"gpu_mem": 5, "cpu_mem": 8},
+        "large": {"gpu_mem": 10, "cpu_mem": 16}
+    }
+    
+    # Get model requirements
+    model_req = model_sizes.get(model_name, model_sizes["base"])
+    
+    # Determine if we can use FP16
+    use_fp16 = cuda_available and gpu_memory >= model_req["gpu_mem"]
+    
+    # Determine optimal batch size
+    if cuda_available:
+        if model_name == "large":
+            batch_size = 1 if gpu_memory < 12 else 2
+        elif model_name == "medium":
+            batch_size = 2 if gpu_memory >= 8 else 1
+        else:
+            batch_size = 4 if gpu_memory >= 6 else 2
+    else:
+        # For CPU, use smaller batch sizes
+        batch_size = 1
+    
+    # Determine optimal block size
+    if cuda_available:
+        blocksize = 8000 if gpu_memory >= 6 else 4000
+    else:
+        blocksize = 4000  # Smaller blocks for CPU
+    
+    print(f"\nOptimized settings for {model_name} model:")
+    print(f"- Batch size: {batch_size}")
+    print(f"- FP16 enabled: {use_fp16}")
+    print(f"- Block size: {blocksize}")
+    
+    return batch_size, use_fp16, blocksize
 
 class WhisperSpeechRecognizer:
     def __init__(self,
                  model_name: str = "base",
                  device: Optional[int] = None,
                  samplerate: int = 16000,
-                 blocksize: int = 8000,
+                 blocksize: Optional[int] = None,
                  language: Optional[str] = None,
-                 task: str = "transcribe"):
+                 task: str = "transcribe",
+                 batch_size: Optional[int] = None,
+                 use_fp16: Optional[bool] = None):
         """
         Initialize the Whisper-based speech recognizer
         
@@ -24,10 +94,20 @@ class WhisperSpeechRecognizer:
             model_name (str): Whisper model name ('tiny', 'base', 'small', 'medium', 'large')
             device (int, optional): Audio input device ID. None for default device
             samplerate (int): Audio sample rate in Hz
-            blocksize (int): Audio block size in samples
+            blocksize (int, optional): Audio block size in samples. None for automatic
             language (str, optional): Language code (e.g., 'en', 'es'). None for auto-detection
             task (str): Either 'transcribe' or 'translate' (translate will convert any language to English)
+            batch_size (int, optional): Number of audio chunks to process in parallel. None for automatic
+            use_fp16 (bool, optional): Whether to use half-precision (FP16). None for automatic
         """
+        # Get optimal settings
+        optimal_batch_size, optimal_fp16, optimal_blocksize = get_optimal_settings(model_name)
+        
+        # Use provided values or optimal defaults
+        self.batch_size = batch_size if batch_size is not None else optimal_batch_size
+        self.use_fp16 = use_fp16 if use_fp16 is not None else optimal_fp16
+        self.blocksize = blocksize if blocksize is not None else optimal_blocksize
+        
         # Check CUDA availability
         self.cuda_available = torch.cuda.is_available()
         self.device = "cuda" if self.cuda_available else "cpu"
@@ -45,16 +125,17 @@ class WhisperSpeechRecognizer:
         self.model_name = model_name
         print(f"\nLoading Whisper model '{model_name}' on {self.device}...")
         
-        # Set torch.load to use weights_only=True for security
-        torch.serialization._weights_only_default = True
-        self.model = whisper.load_model(model_name).to(self.device)
+        # Load model with optimizations
+        self.model = whisper.load_model(model_name, device=self.device)
+        if self.use_fp16 and self.cuda_available:
+            self.model = self.model.half()  # Convert to FP16 for faster inference
+        
         self.language = language
         self.task = task
         
         # Audio settings
         self.audio_device = device
         self.samplerate = samplerate
-        self.blocksize = blocksize
         self.q = queue.Queue()
         self.running = False
         
@@ -70,7 +151,9 @@ class WhisperSpeechRecognizer:
         print(f"- Language: {'Auto-detect' if language is None else language}")
         print(f"- Task: {task} {'(will translate to English)' if task == 'translate' else ''}")
         print(f"- Sample rate: {samplerate} Hz")
-        print(f"- Block size: {blocksize} samples")
+        print(f"- Block size: {self.blocksize} samples")
+        print(f"- Batch size: {self.batch_size}")
+        print(f"- Using FP16: {self.use_fp16 and self.cuda_available}")
         
     def callback(self, indata, frames, time, status):
         """Callback function for the audio stream"""
@@ -100,18 +183,30 @@ class WhisperSpeechRecognizer:
                               callback=self.callback):
                 
                 while self.running:
-                    audio_block = self.q.get()
+                    audio_blocks = []
+                    # Collect batch_size number of blocks
+                    for _ in range(self.batch_size):
+                        try:
+                            audio_block = self.q.get(timeout=0.1)
+                            audio_blocks.append(audio_block)
+                        except queue.Empty:
+                            break
                     
-                    # Check if it's silence
-                    is_silence = np.abs(audio_block).mean() < self.silence_threshold
+                    if not audio_blocks:
+                        continue
                     
-                    if is_silence:
-                        self.silence_frames += 1
-                    else:
-                        self.silence_frames = 0
-                    
-                    # Add audio to buffer
-                    self.audio_buffer.extend(audio_block.flatten().tolist())
+                    # Process all blocks in the batch
+                    for audio_block in audio_blocks:
+                        # Check if it's silence
+                        is_silence = np.abs(audio_block).mean() < self.silence_threshold
+                        
+                        if is_silence:
+                            self.silence_frames += 1
+                        else:
+                            self.silence_frames = 0
+                        
+                        # Add audio to buffer
+                        self.audio_buffer.extend(audio_block.flatten().tolist())
                     
                     # Process if we have enough silence
                     if self.silence_frames >= self.MIN_SILENCE_FRAMES and len(self.audio_buffer) > self.samplerate:
@@ -123,13 +218,14 @@ class WhisperSpeechRecognizer:
                             audio_data = np.clip(audio_data, -1.0, 1.0)
                         
                         try:
-                            # Transcribe
-                            result = self.model.transcribe(
-                                audio_data,
-                                language=self.language,  # None will enable auto-detection
-                                task=self.task,  # 'transcribe' or 'translate'
-                                fp16=self.cuda_available  # Use fp16 if CUDA is available
-                            )
+                            # Transcribe with optimizations
+                            with torch.cuda.amp.autocast(enabled=self.cuda_available):
+                                result = self.model.transcribe(
+                                    audio_data,
+                                    language=self.language,
+                                    task=self.task,
+                                    fp16=self.cuda_available
+                                )
                             
                             if result["text"].strip():
                                 detected_language = result.get("language", "unknown")
@@ -166,14 +262,18 @@ def main():
                       help="Audio input device ID (default: system default)")
     parser.add_argument("--samplerate", type=int, default=16000,
                       help="Audio sample rate in Hz (default: 16000)")
-    parser.add_argument("--blocksize", type=int, default=8000,
-                      help="Audio block size in samples (default: 8000)")
+    parser.add_argument("--blocksize", type=int,
+                      help="Audio block size in samples (default: automatic)")
     parser.add_argument("--language", type=str,
                       help="Language code (e.g., 'en', 'es'). Default: auto-detect")
     parser.add_argument("--translate", action="store_true",
                       help="Translate speech to English (default: transcribe in original language)")
     parser.add_argument("--list-devices", action="store_true",
                       help="List available audio input devices and exit")
+    parser.add_argument("--batch-size", type=int,
+                      help="Number of audio chunks to process in parallel (default: automatic)")
+    parser.add_argument("--no-fp16", action="store_true",
+                      help="Disable FP16 optimization (default: automatic)")
     
     args = parser.parse_args()
     
@@ -189,7 +289,9 @@ def main():
             samplerate=args.samplerate,
             blocksize=args.blocksize,
             language=args.language,
-            task="translate" if args.translate else "transcribe"
+            task="translate" if args.translate else "transcribe",
+            batch_size=args.batch_size,
+            use_fp16=not args.no_fp16 if args.no_fp16 else None
         )
         recognizer.process_audio()
     except KeyboardInterrupt:
