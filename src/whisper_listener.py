@@ -73,7 +73,7 @@ def is_valid_transcription(result):
     return True
 
 class WhisperListener:
-    def __init__(self, samplerate=16000, blocksize=4000, device=None, on_command=None):
+    def __init__(self, samplerate=16000, blocksize=4000, device=None):
         self.samplerate = samplerate
         self.blocksize = blocksize
         self.device = device
@@ -88,7 +88,20 @@ class WhisperListener:
         self.silence_threshold = 0.01
         self.silence_duration = 0
         self.min_silence_duration = 1.0  # Wait for 1 second of silence before processing
-        self.on_command = on_command  # Callback for when a command is recognized
+        self.current_transcription = None
+        self.current_language = None
+        
+        # List available audio devices
+        devices = sd.query_devices()
+        print("\n[Audio] Available input devices:")
+        for i, device in enumerate(devices):
+            if device['max_input_channels'] > 0:  # Only show input devices
+                print(f"[Audio] {i}: {device['name']}")
+        
+        # If no device specified, use default
+        if self.device is None:
+            self.device = sd.default.device[0]  # Get default input device
+            print(f"[Audio] Using default input device: {devices[self.device]['name']}")
 
     def audio_callback(self, indata, frames, time_info, status):
         if status:
@@ -97,6 +110,8 @@ class WhisperListener:
         audio_level = np.abs(indata).mean()
         if audio_level > self.silence_threshold:
             self.silence_duration = 0
+            if self.running:  # Only print if we're running
+                print(f"[Audio] Level: {audio_level:.4f}", end='\r')
         else:
             self.silence_duration += frames / self.samplerate
         self.q.put(indata.copy())
@@ -140,14 +155,7 @@ class WhisperListener:
         return combined
 
     def is_valid_transcription(self, result):
-        """
-        Smart filtering of transcription results.
-        Filters out:
-        - Single words or very short phrases
-        - Low confidence transcriptions
-        - Incomplete sentences
-        - Common noise patterns
-        """
+        """Check if the transcription is valid."""
         text = result.get("text", "").strip().lower()
         
         # Skip empty or very short text
@@ -184,39 +192,53 @@ class WhisperListener:
                 
         return True
 
+    def get_transcription(self):
+        """Get the current transcription and language."""
+        if self.current_transcription:
+            text = self.current_transcription
+            lang = self.current_language
+            self.current_transcription = None
+            self.current_language = None
+            return text, lang
+        return None, None
+
     def listen(self):
         self.running = True
-        with sd.InputStream(samplerate=self.samplerate, channels=1, blocksize=self.blocksize, dtype='float32', callback=self.audio_callback, device=self.device):
-            print("[Whisper] Listening for speech...")
-            buffer = []
-            last_audio = time.time()
-            while self.running:
-                try:
-                    data = self.q.get(timeout=0.5)
-                    buffer.append(data)
-                    
-                    # Process audio if we have enough silence or buffer is very large
-                    if self.silence_duration >= self.min_silence_duration or len(buffer) * self.blocksize / self.samplerate > 10:
-                        if len(buffer) > 0:  # Only process if we have data
-                            audio = np.concatenate(buffer, axis=0).flatten()
-                            buffer = []
-                            last_audio = time.time()
-                            self.silence_duration = 0
-                            
-                            # Transcribe
-                            result = self.model.transcribe(audio, fp16=torch.cuda.is_available())
-                            text = result.get("text", "").strip()
-                            
-                            if text:
-                                # Combine with previous transcriptions
-                                combined_text = self.combine_transcriptions(text)
-                                if self.is_valid_transcription({"text": combined_text, "avg_logprob": result.get("avg_logprob", 0)}):
-                                    print(f"[Whisper] Recognized: {combined_text}")
-                                    # Call the command callback if provided
-                                    if self.on_command:
-                                        self.on_command(combined_text)
-                except queue.Empty:
-                    continue
+        try:
+            with sd.InputStream(samplerate=self.samplerate, channels=1, blocksize=self.blocksize, dtype='float32', callback=self.audio_callback, device=self.device):
+                print("[Whisper] Listening for speech...")
+                buffer = []
+                last_audio = time.time()
+                while self.running:
+                    try:
+                        data = self.q.get(timeout=0.5)
+                        buffer.append(data)
+                        
+                        # Process audio if we have enough silence or buffer is very large
+                        if self.silence_duration >= self.min_silence_duration or len(buffer) * self.blocksize / self.samplerate > 10:
+                            if len(buffer) > 0:  # Only process if we have data
+                                audio = np.concatenate(buffer, axis=0).flatten()
+                                buffer = []
+                                last_audio = time.time()
+                                self.silence_duration = 0
+                                
+                                # Transcribe
+                                result = self.model.transcribe(audio, fp16=torch.cuda.is_available())
+                                text = result.get("text", "").strip()
+                                language = result.get("language", "en")
+                                
+                                if text:
+                                    # Combine with previous transcriptions
+                                    combined_text = self.combine_transcriptions(text)
+                                    if self.is_valid_transcription({"text": combined_text, "avg_logprob": result.get("avg_logprob", 0)}):
+                                        print(f"[Whisper] Recognized ({language}): {combined_text}")
+                                        self.current_transcription = combined_text
+                                        self.current_language = language
+                    except queue.Empty:
+                        continue
+        except Exception as e:
+            print(f"[Audio] Error in audio stream: {e}")
+            self.running = False
 
     def stop(self):
         self.running = False
