@@ -1,119 +1,107 @@
 import json
 import requests
 import os
+import yaml
 
-def load_prompt():
-    """Load the prompt from the config file."""
+def load_config():
+    """Load the configuration from the YAML file."""
     try:
-        with open('config/llm_prompt.txt', 'r', encoding='utf-8') as f:
+        with open('config/user.yaml', 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    except Exception as e:
+        print(f"[LLM] Error loading config: {e}")
+        return None
+
+def load_prompt(prompt_file):
+    """Load a prompt from the config file."""
+    try:
+        with open(f'config/{prompt_file}', 'r', encoding='utf-8') as f:
             return f.read()
     except Exception as e:
         print(f"[LLM] Error loading prompt: {e}")
         return ""
 
+def call_llm(prompt: str, model_config: dict) -> str:
+    """Make a call to the LLM with the given prompt and configuration."""
+    try:
+        request_data = {
+            "model": model_config["model"],
+            "prompt": prompt,
+            "stream": False,
+            "num_predict": model_config["num_predict"],
+            "temperature": model_config["temperature"],
+            "top_p": model_config["top_p"],
+            "repeat_penalty": model_config["repeat_penalty"],
+            "stop": model_config["stop"]
+        }
+        
+        response = requests.post('http://localhost:11434/api/generate', json=request_data)
+        response.raise_for_status()
+        
+        result = response.json()
+        return result.get('response', '').strip()
+    except Exception as e:
+        print(f"[LLM] Error calling Ollama API: {e}")
+        return ""
+
 def map_to_command(text: str, language: str) -> dict:
     """
-    Map user input to a command using the LLM.
+    Map user input to a command using two LLM calls:
+    1. First LLM classifies the command
+    2. Second LLM generates a natural response
     
     Args:
         text: The user's input text
         language: The language of the input ('en' or 'es')
     
     Returns:
-        dict: A dictionary containing the command, response text, and language
+        dict: A dictionary containing the command and response text
     """
-    prompt = load_prompt()
-    if not prompt:
+    config = load_config()
+    if not config:
         return {
             "command": "none",
-            "text": "Error: Could not load prompt configuration",
-            "language": language
+            "text": "Error: Could not load configuration"
         }
     
-    # Prepare the input in the expected format
-    input_data = {
-        "text": text,
-        "language": language
-    }
-    
-    # Prepare the request to Ollama
-    request_data = {
-        "model": "tinyllama",
-        "prompt": f"{prompt}\n{json.dumps(input_data, ensure_ascii=False)}",
-        "stream": False,
-        "num_predict": 100,  # Increased for JSON responses
-        "temperature": 0.1,  # Low temperature for more consistent outputs
-        "top_p": 0.1,  # Low top_p for more focused outputs
-        "repeat_penalty": 1.1  # Slight penalty for repetition
-    }
-    
-    try:
-        # Send request to Ollama
-        response = requests.post('http://localhost:11434/api/generate', json=request_data)
-        response.raise_for_status()
-        
-        # Parse the response
-        result = response.json()
-        response_text = result.get('response', '').strip()
-        
-        # Try to parse the JSON response
-        try:
-            # Find the first '{' and last '}' to extract just the JSON object
-            start = response_text.find('{')
-            end = response_text.rfind('}') + 1
-            if start >= 0 and end > start:
-                json_str = response_text[start:end]
-                # Clean up any potential formatting issues
-                json_str = json_str.replace('\n', ' ').replace('\r', '')
-                parsed = json.loads(json_str)
-                
-                # Validate the response format
-                if not all(key in parsed for key in ['command', 'text', 'language']):
-                    print(f"[LLM] Invalid response format: {parsed}")
-                    return {
-                        "command": "none",
-                        "text": "Lo siento, hubo un error procesando tu solicitud." if language == "es" else "Sorry, there was an error processing your request.",
-                        "language": language
-                    }
-                
-                # Validate the command
-                valid_commands = ['help', 'list', 'status', 'play', 'stop', 'exit', 'none']
-                if parsed['command'] not in valid_commands:
-                    print(f"[LLM] Invalid command: {parsed['command']}")
-                    return {
-                        "command": "none",
-                        "text": "Lo siento, no entendí ese comando." if language == "es" else "Sorry, I didn't understand that command.",
-                        "language": language
-                    }
-                
-                # Validate language matches
-                if parsed['language'] != language:
-                    print(f"[LLM] Warning: Response language {parsed['language']} doesn't match input language {language}")
-                    parsed['language'] = language
-                
-                return parsed
-            else:
-                print(f"[LLM] No JSON object found in response: {response_text}")
-                return {
-                    "command": "none",
-                    "text": "Lo siento, hubo un error en la respuesta." if language == "es" else "Sorry, there was an error in the response.",
-                    "language": language
-                }
-        except json.JSONDecodeError as e:
-            print(f"[LLM] Invalid JSON response: {response_text}")
-            return {
-                "command": "none",
-                "text": "Lo siento, hubo un error procesando la respuesta." if language == "es" else "Sorry, there was an error processing the response.",
-                "language": language
-            }
-            
-    except requests.exceptions.RequestException as e:
-        print(f"[LLM] Error calling Ollama API: {e}")
+    # Step 1: Command Classification
+    command_prompt = load_prompt('command_prompt.txt')
+    if not command_prompt:
         return {
             "command": "none",
-            "text": "Lo siento, no pude conectar con el asistente." if language == "es" else "Sorry, I couldn't connect to the assistant.",
-            "language": language
+            "text": "Error: Could not load command prompt"
         }
+    
+    command_prompt = command_prompt.replace("{{user_input}}", text)
+    command = call_llm(command_prompt, config["llm"]["command_model"]).strip().lower()
+    
+    # Validate the command
+    valid_commands = ['help', 'list', 'status', 'play', 'stop', 'exit', 'none']
+    if command not in valid_commands:
+        print(f"[LLM] Invalid command: {command}")
+        return {
+            "command": "none",
+            "text": "Lo siento, no entendí ese comando." if language == "es" else "Sorry, I didn't understand that command."
+        }
+    
+    # Step 2: Response Generation
+    response_prompt = load_prompt('response_prompt.txt')
+    if not response_prompt:
+        return {
+            "command": command,
+            "text": "Error: Could not load response prompt"
+        }
+    
+    response_prompt = response_prompt.replace("{{command}}", command)
+    response_prompt = response_prompt.replace("{{user_input}}", text)
+    response_prompt = response_prompt.replace("{{language}}", language)
+    
+    response_text = call_llm(response_prompt, config["llm"]["response_model"]).strip()
+    
+    return {
+        "command": command,
+        "text": response_text
+    }
 
 if __name__ == "__main__":
     # Test the command mapper

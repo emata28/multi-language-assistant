@@ -1,0 +1,16 @@
+Command: "I need help" -> help
+Command: "¿me puedes ayudar?" -> help
+Command: "what can you do?" -> list
+Command: "¿qué puedes hacer?" -> list
+Command: "are you there?" -> status
+Command: "¿estás ahí?" -> status
+Command: "play some music" -> play
+Command: "reproduce música" -> play
+Command: "stop that" -> stop
+Command: "detén eso" -> stop
+Command: "goodbye" -> exit
+Command: "adiós" -> exit
+Command: "{{user_input}}" ->
+
+Input: {{user_input}}
+Output: 

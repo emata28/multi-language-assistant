@@ -19,12 +19,34 @@ speech:
 # LLM settings
 llm:
   provider: "ollama" # LLM provider (ollama)
-  model: "tinyllama" # Using tinyllama for faster processing
-  temperature: 0.1 # Lower temperature for more consistent results
-  max_tokens: 50 # Reduced max tokens since we only need short responses
-  num_ctx: 512 # Smaller context window for faster processing
-  num_thread: 4 # Number of CPU threads to use
-  num_gpu: 1 # Number of GPU layers to use (if available)
+
+  # Command classification model (fast and minimal)
+  command_model:
+    model: "tinyllama" # Fast model for command classification
+    temperature: 0.0 # Zero temperature for consistent results
+    max_tokens: 1 # Single token for command name
+    num_ctx: 4 # Minimal context window for faster processing
+    num_thread: 2 # Number of CPU threads to use
+    num_gpu: 1 # Number of GPU layers to use (if available)
+    top_p: 0.000000001 # Extremely low top_p for most focused outputs
+    repeat_penalty: 1.0 # No repetition penalty
+    stop: ["Command:", "->", "\n", " "] # Stop at any of these sequences
+    num_predict: 1 # Single prediction for command name
+    seed: 42 # Fixed seed for consistent outputs
+
+  # Response generation model (more capable)
+  response_model:
+    model: "llama2" # More capable model for natural responses
+    temperature: 0.7 # Higher temperature for more natural responses
+    max_tokens: 50 # More tokens for natural responses
+    num_ctx: 256 # Larger context window for better understanding
+    num_thread: 8 # Number of CPU threads to use
+    num_gpu: 3 # Number of GPU layers to use (if available)
+    top_p: 0.9 # Higher top_p for more creative responses
+    repeat_penalty: 1.1 # Slight repetition penalty
+    stop: ["Input:", "Example:", "Command:", "Language:"] # Stop at any of these sequences
+    num_predict: 50 # More predictions for natural responses
+    seed: 42 # Fixed seed for consistent outputs
 
 # Command settings
 commands:
